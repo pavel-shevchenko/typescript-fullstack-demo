@@ -1,0 +1,95 @@
+# Comfort demo monorepo — правила для агентов
+
+---
+
+## 1. Архитектура
+
+- **Три Hono-микросервиса:** `api-cms` (контент + AI recommendations), `api-crm` (tenant только здесь), `api-search` (FTS + pgvector).
+- **Next.js** `comfort_public` — server actions → прямые HTTP вызовы `BASE_URL_OF_API_CMS` / `BASE_URL_OF_API_CRM` / `BASE_URL_OF_API_SEARCH`.
+- **Python coding** — `/recommend`, `/artifacts/compile` → `generated/runtime/` без полного redeploy.
+- **domain_unified** — CRUD RBAC, `includePermissions`, `*-access.ts` по образцу production.
+
+---
+
+## 2. RBAC и tenant
+
+| Контекст | Роли | Tenant |
+|----------|------|--------|
+| CMS | `admin` / `customer` | **нет** |
+| CRM | JWT + `CrmTenantMember` | **да**, scope через `userId` |
+
+`includePermissions`: `admin: true`, `customer` — минимальное дерево join. **Никогда** `customer: true`.
+
+---
+
+## 3. AI-поток (не batch)
+
+```
+prompt → server action → python /recommend
+  → ComfortAiRecommendation (pending)
+  → confirm → assertWhitelistedPayload → domain_unified apply → audit event
+```
+
+Whitelist моделей/операций: `packages/react_common/server-actions/comfort-ai/apply-whitelist.ts`.
+
+---
+
+## 4. Auth
+
+- JWT только в httpOnly cookie `auth_token` (`react_common/server/auth-cookie.ts`).
+- Не отдавать JWT клиенту из actions после login — только `{ user }`.
+- `import 'server-only'` для `react_common/server`.
+
+---
+
+## 5. Prisma
+
+- CMS: `packages/prisma_cms`, CRM: `packages/prisma_crm`.
+- Префиксы таблиц: `cms_*`, `crm_*`.
+- После правок схем: `cd packages/prisma_cms && npx prisma generate` (и crm).
+
+---
+
+## 6. Rate limiting
+
+- Hono: `ComfortThrottlerModule` → `DomainPrismaThrottlerModule` в обоих API.
+- Гостевой SSR landing: `PublicCmsReadController` без JWT.
+
+---
+
+## 7. Redis cache
+
+- `prismaRedisCacheExtension` в `ApiCmsPrismaService` / `ApiCrmPrismaService`.
+- `prismaAutoCacheInvalidation: { enabled: true }` на domain-контроллерах ставь.
+
+---
+
+## 8. Deploy
+
+- Локально: `docker compose up` в `comfort/`.
+- Prod: `docker-compose-prod-common.yml` + overlay main/test.
+- Jenkins + DinD + Forgejo: один `docker-compose-host.yml` (сеть `comfort_host`).
+- App-data backup: `infrastructure/scripts/backup-app-data.sh main|test`.
+- Единый `.env`; шаблон Jenkins — `.env.template`.
+
+---
+
+## 9. Anti-goals (по умолчанию не требуются)
+
+- Gateway / BFF / relay между Next и Hono.
+- Tenant в CMS RBAC.
+
+---
+
+## 10. Карта пакетов
+
+| Путь | Назначение |
+|------|------------|
+| `applications/comfort_backends/api-cms\|api-crm\|api-search` | Hono API |
+| `applications/comfort_public` | Next.js |
+| `packages/domain_unified` | buildDomainController |
+| `packages/react_common` | server actions + server-only auth |
+| `packages/validation` | class-validator DTO |
+| `services/python_coding` | FastAPI coding service |
+
+См. [README.md](./README.md), [PRACTICES.md](./PRACTICES.md), [STAGE3.md](./STAGE3.md).

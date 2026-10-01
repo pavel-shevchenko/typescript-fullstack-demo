@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum SearchDocumentStatus {
+  draft
+  published
+  archived
+}
+
+enum SearchIndexJobStatus {
+  pending
+  running
+  completed
+  failed
+}
+
+model SearchDocument {
+  id          BigInt               @id @default(autoincrement())
+  externalKey String               @unique
+  sourceType  String
+  title       String
+  body        String
+  url         String?
+  status      SearchDocumentStatus @default(draft)
+  tenantKey   String?
+  metadata    Json?
+  contentHash String
+  publishedAt DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  Chunks SearchChunk[]
+  Jobs   SearchIndexJob[]
+
+  @@index([status, updatedAt])
+  @@index([tenantKey])
+  @@map("search_document")
+}
+
+model SearchChunk {
+  id         BigInt   @id @default(autoincrement())
+  documentId BigInt
+  ordinal    Int
+  content    String
+  tokenCount Int      @default(0)
+  metadata   Json?
+  /// Generated FTS column managed in search-db-setup.ts (keep in schema so db push does not drop it).
+  searchVector Unsupported("tsvector")? @default(dbgenerated())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  Document  SearchDocument    @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  Embedding SearchEmbedding?
+
+  @@unique([documentId, ordinal])
+  @@index([documentId])
+  @@map("search_chunk")
+}
+
+model SearchEmbedding {
+  id        BigInt                       @id @default(autoincrement())
+  chunkId   BigInt                       @unique
+  model     String
+  dimensions Int                        @default(1536)
+  vector    Unsupported("vector(1536)")?
+  metadata  Json?
+  createdAt DateTime                     @default(now())
+  updatedAt DateTime                     @updatedAt
+
+  Chunk SearchChunk @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+
+  @@map("search_embedding")
+}
+
+model SearchIndexJob {
+  id          BigInt               @id @default(autoincrement())
+  documentId  BigInt?
+  externalKey String?
+  status      SearchIndexJobStatus @default(pending)
+  operation   String
+  message     String?
+  correlationId String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  Document SearchDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@map("search_index_job")
+}

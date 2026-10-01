@@ -1,0 +1,17 @@
+antisamy-markup-formatter:latest
+authorize-project:1.8.1
+build-timeout:1.33
+cloudbees-folder:6.1053.vd62fb_b_f7367b_
+configuration-as-code:2036.v0b_c2de701dcb_
+credentials-binding:702.vfe613e537e88
+docker-plugin:1.7.0
+docker-workflow:580.vc0c340686b_54
+docker-commons:latest
+generic-webhook-trigger:1.88.2
+git:5.6.0
+job-dsl:1.90
+lockable-resources:latest
+matrix-auth:3.2.3
+timestamper:1.28
+workflow-aggregator:600.vb_57cdd26fdd7
+ws-cleanup:0.48

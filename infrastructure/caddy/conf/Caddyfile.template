@@ -1,0 +1,25 @@
+${DOMAIN_MAIN_BRANCH} {
+	reverse_proxy /api-cms/public/* docker:${MAIN_BRANCH_API_CMS_PORT}
+	reverse_proxy /api-crm/public/* docker:${MAIN_BRANCH_API_CRM_PORT}
+	reverse_proxy /api-search/* docker:${MAIN_BRANCH_API_SEARCH_PORT}
+	reverse_proxy docker:${MAIN_BRANCH_FRONTEND_PORT} {
+		transport http {
+			keepalive 2m
+		}
+	}
+}
+
+${DOMAIN_TEST_BRANCH} {
+	reverse_proxy /api-cms/public/* docker:${TEST_BRANCH_API_CMS_PORT}
+	reverse_proxy /api-crm/public/* docker:${TEST_BRANCH_API_CRM_PORT}
+	reverse_proxy /api-search/* docker:${TEST_BRANCH_API_SEARCH_PORT}
+	reverse_proxy docker:${TEST_BRANCH_FRONTEND_PORT} {
+		transport http {
+			keepalive 2m
+		}
+	}
+}
+
+${DOMAIN_FORGEJO} {
+	reverse_proxy 172.20.0.20:3000
+}

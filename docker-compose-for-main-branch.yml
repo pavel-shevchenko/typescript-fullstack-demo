@@ -1,0 +1,404 @@
+# Prod main branch: CMS/CRM/search Postgres clusters + PgCat, SeaweedFS replication 001, app stack.
+# Запуск: docker compose -p comfort-main -f docker-compose-prod-common.yml -f docker-compose-for-main-branch.yml up
+
+name: comfort-main
+
+x-pg-primary: &pg-primary
+  image: postgres:18.3-alpine
+  restart: unless-stopped
+  environment:
+    TZ: ${WORKSPACE_TIMEZONE}
+    POSTGRES_HOST_AUTH_METHOD: md5
+    POSTGRES_USER: ${PG_USER}
+    POSTGRES_PASSWORD: ${PG_PASSWORD}
+  command:
+    - postgres
+    - -c
+    - listen_addresses=*
+    - -c
+    - wal_level=replica
+    - -c
+    - max_wal_senders=10
+    - -c
+    - max_replication_slots=10
+    - -c
+    - wal_keep_size=512MB
+    - -c
+    - max_wal_size=2048MB
+    - -c
+    - hot_standby=on
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+    start_period: 10s
+  networks: [database]
+
+x-pg-replica: &pg-replica
+  image: postgres:18.3-alpine
+  restart: unless-stopped
+  environment:
+    TZ: ${WORKSPACE_TIMEZONE}
+    POSTGRES_HOST_AUTH_METHOD: md5
+    POSTGRES_USER: ${PG_USER}
+    POSTGRES_PASSWORD: ${PG_PASSWORD}
+    PGPASSWORD: ${PG_PASSWORD}
+  networks: [database]
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+    start_period: 10s
+
+services:
+  comfort_prepare_config:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}prepare_config__prod
+    image: alpine:latest
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace/
+    env_file:
+      - .env
+    entrypoint: >
+      /bin/sh -c "
+        apk add --no-cache gettext;
+        cd /workspace/infrastructure/pgcat/;
+        export PGCAT_PORT=6432 POOL_NAME=comfort_cms PG_DATABASE=$${CMS_PG_DATABASE} PG_PRIMARY_HOST=cms-pg-1 PG_REPLICA_A_HOST=cms-pg-2 PG_REPLICA_B_HOST=cms-pg-3 PGCAT_ADMIN_USERNAME=$${PGCAT_ADMIN_USERNAME} PGCAT_ADMIN_PASSWORD=$${PGCAT_ADMIN_PASSWORD} PG_USER=$${PG_USER} PG_PASSWORD=$${PG_PASSWORD};
+        envsubst < templates/pgcat.toml > cms.generated.toml;
+        export PGCAT_PORT=6433 POOL_NAME=comfort_crm PG_DATABASE=$${CRM_PG_DATABASE} PG_PRIMARY_HOST=crm-pg-1 PG_REPLICA_A_HOST=crm-pg-2 PG_REPLICA_B_HOST=crm-pg-3;
+        envsubst < templates/pgcat.toml > crm.generated.toml;
+        export PGCAT_PORT=6434 POOL_NAME=comfort_search PG_DATABASE=$${SEARCH_PG_DATABASE} PG_PRIMARY_HOST=search-pg-1 PG_REPLICA_A_HOST=search-pg-2 PG_REPLICA_B_HOST=search-pg-3;
+        envsubst < templates/pgcat.toml > search.generated.toml;
+        cd /workspace/infrastructure/seaweedfs/;
+        envsubst '$${SEAWEEDFS_S3_ACCESS_KEY} $${SEAWEEDFS_S3_SECRET_KEY}' < templates/s3.json > config/s3.json;
+        exit 0;
+      "
+
+  cms-pg-1:
+    <<: *pg-primary
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}cms_pg_1
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${CMS_PG_DATABASE}
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/cms-1/:/var/lib/postgresql
+      - ${MONOREPO_ABS_PATH-./}infrastructure/postgres/initdb/01-allow-replication.sh:/docker-entrypoint-initdb.d/01-allow-replication.sh:ro
+    depends_on:
+      comfort_prepare_config:
+        condition: service_completed_successfully
+
+  cms-pg-2:
+    <<: *pg-replica
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}cms_pg_2
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/cms-2/:/var/lib/postgresql
+      - ${MONOREPO_ABS_PATH-./}infrastructure/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on:
+      cms-pg-1:
+        condition: service_healthy
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PGPASSWORD: ${PG_PASSWORD}
+      PRIMARY_HOST: cms-pg-1
+      SLOT: cms_replica_2
+      PGDATA: /var/lib/postgresql/18/docker
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+
+  cms-pg-3:
+    <<: *pg-replica
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}cms_pg_3
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/cms-3/:/var/lib/postgresql
+      - ${MONOREPO_ABS_PATH-./}infrastructure/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on:
+      cms-pg-1:
+        condition: service_healthy
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PGPASSWORD: ${PG_PASSWORD}
+      PRIMARY_HOST: cms-pg-1
+      SLOT: cms_replica_3
+      PGDATA: /var/lib/postgresql/18/docker
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+
+  cms-pgcat:
+    image: ghcr.io/postgresml/pgcat:v1.2.0
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}cms_pgcat
+    restart: unless-stopped
+    depends_on:
+      comfort_prepare_config:
+        condition: service_completed_successfully
+      cms-pg-1:
+        condition: service_healthy
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}infrastructure/pgcat/cms.generated.toml:/etc/pgcat/pgcat.toml:ro
+    command: [pgcat, /etc/pgcat/pgcat.toml]
+    networks: [database]
+
+  crm-pg-1:
+    <<: *pg-primary
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}crm_pg_1
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${CRM_PG_DATABASE}
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/crm-1/:/var/lib/postgresql
+      - ${MONOREPO_ABS_PATH-./}infrastructure/postgres/initdb/01-allow-replication.sh:/docker-entrypoint-initdb.d/01-allow-replication.sh:ro
+    depends_on:
+      comfort_prepare_config:
+        condition: service_completed_successfully
+
+  crm-pg-2:
+    <<: *pg-replica
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}crm_pg_2
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/crm-2/:/var/lib/postgresql
+      - ${MONOREPO_ABS_PATH-./}infrastructure/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on:
+      crm-pg-1:
+        condition: service_healthy
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PGPASSWORD: ${PG_PASSWORD}
+      PRIMARY_HOST: crm-pg-1
+      SLOT: crm_replica_2
+      PGDATA: /var/lib/postgresql/18/docker
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+
+  crm-pg-3:
+    <<: *pg-replica
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}crm_pg_3
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/crm-3/:/var/lib/postgresql
+      - ${MONOREPO_ABS_PATH-./}infrastructure/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on:
+      crm-pg-1:
+        condition: service_healthy
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PGPASSWORD: ${PG_PASSWORD}
+      PRIMARY_HOST: crm-pg-1
+      SLOT: crm_replica_3
+      PGDATA: /var/lib/postgresql/18/docker
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+
+  crm-pgcat:
+    image: ghcr.io/postgresml/pgcat:v1.2.0
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}crm_pgcat
+    restart: unless-stopped
+    depends_on:
+      comfort_prepare_config:
+        condition: service_completed_successfully
+      crm-pg-1:
+        condition: service_healthy
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}infrastructure/pgcat/crm.generated.toml:/etc/pgcat/pgcat.toml:ro
+    command: [pgcat, /etc/pgcat/pgcat.toml]
+    networks: [database]
+
+  search-pg-1:
+    <<: *pg-primary
+    build:
+      context: ${MONOREPO_ABS_PATH-./}infrastructure/postgres/search-pg
+      args:
+        SEARCH_POSTGRES_IMAGE: ${SEARCH_POSTGRES_IMAGE:-pgvector/pgvector:0.8.6-pg18}
+    image: ${CONTAINER_NAME_PREFIX-comfort_}search-pg:fts
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}search_pg_1
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${SEARCH_PG_DATABASE:-comfort_search}
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/search-1/:/var/lib/postgresql
+      - ${MONOREPO_ABS_PATH-./}infrastructure/postgres/initdb/01-allow-replication.sh:/docker-entrypoint-initdb.d/01-allow-replication.sh:ro
+    depends_on:
+      comfort_prepare_config:
+        condition: service_completed_successfully
+
+  search-pg-2:
+    <<: *pg-replica
+    image: ${CONTAINER_NAME_PREFIX-comfort_}search-pg:fts
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}search_pg_2
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/search-2/:/var/lib/postgresql
+      - ${MONOREPO_ABS_PATH-./}infrastructure/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on:
+      search-pg-1:
+        condition: service_healthy
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PGPASSWORD: ${PG_PASSWORD}
+      PRIMARY_HOST: search-pg-1
+      SLOT: search_replica_2
+      PGDATA: /var/lib/postgresql/18/docker
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+
+  search-pg-3:
+    <<: *pg-replica
+    image: ${CONTAINER_NAME_PREFIX-comfort_}search-pg:fts
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}search_pg_3
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/search-3/:/var/lib/postgresql
+      - ${MONOREPO_ABS_PATH-./}infrastructure/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on:
+      search-pg-1:
+        condition: service_healthy
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PGPASSWORD: ${PG_PASSWORD}
+      PRIMARY_HOST: search-pg-1
+      SLOT: search_replica_3
+      PGDATA: /var/lib/postgresql/18/docker
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+
+  search-pgcat:
+    image: ghcr.io/postgresml/pgcat:v1.2.0
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}search_pgcat
+    restart: unless-stopped
+    depends_on:
+      comfort_prepare_config:
+        condition: service_completed_successfully
+      search-pg-1:
+        condition: service_healthy
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}infrastructure/pgcat/search.generated.toml:/etc/pgcat/pgcat.toml:ro
+    command: [pgcat, /etc/pgcat/pgcat.toml]
+    networks: [database]
+
+  seaweedfs:
+    command: server -dir=/data -filer -s3 -s3.config=/config/s3.json -master.defaultReplication=001 -filer.defaultReplicaPlacement=001 -master.volumePreallocate=false -master.volumeSizeLimitMB=512 -volume.minFreeSpace=1GiB -volume.max=4 -ip.bind=0.0.0.0
+
+  seaweedfs-volume-replica:
+    image: chrislusf/seaweedfs:3.94
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}seaweedfs_volume_replica
+    restart: unless-stopped
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    env_file:
+      - .env
+    command: volume -mserver=seaweedfs:9333 -dir=/data -port=8081 -ip.bind=0.0.0.0 -ip=seaweedfs-volume-replica -minFreeSpace=1GiB -max=4
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/seaweedfs/data_replica/:/data/
+    networks:
+      - seaweedfs
+
+  api-cms:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}api_cms__prod
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_backends/api-cms
+    env_file: [.env]
+    environment:
+      SEARCH_DATABASE_URL: ${SEARCH_DATABASE_DIRECT_URL}
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace
+    command: ["/bin/sh", "-c", "cd /workspace && bun install && cd applications/comfort_backends/api-cms && bun run start"]
+    ports:
+      - ${MAIN_BRANCH_API_CMS_PORT}:3000
+    depends_on:
+      comfort_prepare_cms:
+        condition: service_completed_successfully
+      cms-pgcat:
+        condition: service_started
+    networks: [edge, database, seaweedfs]
+
+  api-crm:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}api_crm__prod
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_backends/api-crm
+    env_file: [.env]
+    environment:
+      SEARCH_DATABASE_URL: ${SEARCH_DATABASE_DIRECT_URL}
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace
+    command: ["/bin/sh", "-c", "cd /workspace && bun install && cd applications/comfort_backends/api-crm && bun run start"]
+    ports:
+      - ${MAIN_BRANCH_API_CRM_PORT}:3000
+    depends_on:
+      comfort_prepare_crm:
+        condition: service_completed_successfully
+      crm-pgcat:
+        condition: service_started
+    networks: [edge, database, seaweedfs]
+
+  api-search:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}api_search__prod
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_backends/api-search
+    env_file: [.env]
+    environment:
+      SEARCH_DATABASE_URL: ${SEARCH_DATABASE_URL}
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace
+    command: ["/bin/sh", "-c", "cd /workspace && bun install && cd applications/comfort_backends/api-search && bun run start"]
+    ports:
+      - ${MAIN_BRANCH_API_SEARCH_PORT}:3000
+    depends_on:
+      comfort_prepare_search:
+        condition: service_completed_successfully
+      search-pgcat:
+        condition: service_started
+    networks: [edge, database]
+
+  python-coding:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}python_coding__prod
+    build:
+      context: ${MONOREPO_ABS_PATH-./}services/python_coding
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      COMFORT_GENERATED_ROOT: /workspace/generated/runtime
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace
+    networks: [edge]
+
+  comfort_public:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}public__prod
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_public
+    env_file: [.env]
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace
+    command:
+      [
+        "/bin/sh",
+        "-c",
+        "cd /workspace && bun install && cd applications/comfort_public && bun run build && bun run start",
+      ]
+    ports:
+      - ${MAIN_BRANCH_FRONTEND_PORT}:3000
+    depends_on: [api-cms, api-crm, api-search, python-coding]
+    networks: [edge]

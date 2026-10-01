@@ -1,0 +1,12 @@
+node_modules/
+.next/
+dist/
+*.log
+.env
+.env.local
+infrastructure/postgres/data/
+infrastructure/seaweedfs/data/
+generated/runtime/
+applications/comfort_public/playwright-report/
+applications/comfort_public/test-results/
+.DS_Store

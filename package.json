@@ -1,0 +1,35 @@
+{
+  "name": "comfort",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "typecheck": "bun run typecheck:cms && bun run typecheck:crm && bun run typecheck:search && bun run typecheck:web",
+    "typecheck:cms": "bunx tsc --noEmit -p applications/comfort_backends/api-cms/tsconfig.json",
+    "typecheck:crm": "bunx tsc --noEmit -p applications/comfort_backends/api-crm/tsconfig.json",
+    "typecheck:search": "bunx tsc --noEmit -p applications/comfort_backends/api-search/tsconfig.json",
+    "typecheck:web": "bunx tsc --noEmit -p applications/comfort_public/tsconfig.json",
+    "test:focused": "bun test applications/comfort_backends/api-cms/domain-unified/ai/comfort-ai-recommendation.test.ts applications/comfort_backends/api-search/search/search.test.ts packages/domain_unified/file/file-metadata.test.ts",
+    "e2e": "bun run --cwd applications/comfort_public e2e",
+    "e2e:smoke": "bun run --cwd applications/comfort_public e2e:smoke",
+    "e2e:ci": "bun run --cwd applications/comfort_public e2e:ci"
+  },
+  "workspaces": [
+    "applications/comfort_backends/*",
+    "applications/comfort_public",
+    "packages/*"
+  ],
+  "packageManager": "bun@1.3.14",
+  "devDependencies": {
+    "@types/bcryptjs": "^3.0.0",
+    "@types/bun": "^1.3.14",
+    "@types/passport-jwt": "^4.0.1",
+    "prettier": "3.2.5"
+  },
+  "overrides": {
+    "pg": "8.18.0",
+    "prisma": "7.9.1",
+    "@prisma/client": "7.9.1",
+    "@prisma/adapter-pg": "7.9.1"
+  }
+}

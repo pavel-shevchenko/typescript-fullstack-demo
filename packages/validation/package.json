@@ -1,0 +1,14 @@
+{
+  "name": "validation",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./index",
+  "types": "./index.ts",
+  "peerDependencies": {
+    "class-transformer": "0.5.1",
+    "class-validator": "0.14.1",
+    "prisma_cms": "workspace:*",
+    "prisma_crm": "workspace:*",
+    "prisma_search": "workspace:*"
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "name": "domain_unified",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./index",
+  "types": "./index.ts",
+  "source": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    },
+    "./client": {
+      "types": "./client.ts",
+      "default": "./client.ts"
+    },
+    "./nest-for-hono": {
+      "types": "./nest-for-hono/index.ts",
+      "default": "./nest-for-hono/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "bun build --target=bun --outfile ./index.js ./index.ts"
+  },
+  "dependencies": {
+    "hono": "4.13.3",
+    "jose": "6.0.11",
+    "reflect-metadata": "0.2.2"
+  },
+  "devDependencies": {
+    "prisma_cms": "workspace:*",
+    "prisma_crm": "workspace:*",
+    "prisma_search": "workspace:*",
+    "types_consts_utils": "workspace:*",
+    "typescript": "5.7.3",
+    "@types/busboy": "1.5.0",
+    "prisma-extension-redis": "3.4.1"
+  },
+  "peerDependencies": {
+    "typescript": "5.7.3",
+    "busboy": "1.6.0",
+    "class-transformer": "0.5.1",
+    "class-validator": "0.14.1"
+  }
+}

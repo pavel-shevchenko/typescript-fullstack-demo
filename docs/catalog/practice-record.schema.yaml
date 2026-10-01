@@ -1,0 +1,108 @@
+schema_version: 1
+title: Universal practice record template
+description: >-
+  Machine-readable template for business-facing architecture practices with
+  engineering acceptance and auditable maturity evidence.
+
+enums:
+  classification:
+    - BASELINE
+    - CONDITIONAL
+    - DOMAIN_SPECIFIC
+    - NOT_APPLICABLE
+  implementation_status:
+    - IMPLEMENTED
+    - DEMO
+    - PLANNED
+    - NOT_APPLICABLE
+    - RISK
+  maturity:
+    - M0_DISCUSSED
+    - M1_DESIGNED
+    - M2_IMPLEMENTED
+    - M3_TESTED
+    - M4_OPERATED
+    - M5_MEASURED
+  deployment_profile:
+    - local
+    - test
+    - main
+
+required_fields:
+  - id
+  - name
+  - classification
+  - implementation_status
+  - maturity
+  - business_outcome
+  - adoption_trigger
+  - reconsideration_trigger
+  - engineering_acceptance
+  - evidence
+  - verification
+  - limitations_non_claims
+  - risks_counterindications
+  - owner
+  - last_reviewed
+  - next_review
+
+record_template:
+  id: "CATEGORY-NNN"
+  name: "Canonical practice name"
+  aliases: []
+  classification: BASELINE
+  implementation_status: PLANNED
+  maturity: M0_DISCUSSED
+  business_outcome: "TBD: customer-visible result"
+  deployment_profiles: []
+  adoption_trigger:
+    - "TBD: measurable condition that justifies adoption"
+  reconsideration_trigger:
+    - "TBD: measurable condition that requires a new decision"
+  engineering_acceptance:
+    - "TBD: objective implementation criterion"
+    - "TBD: negative/failure-path criterion"
+  evidence:
+    code: []
+    configuration: []
+    tests: []
+    runbooks: []
+    dashboards: []
+    adrs: []
+  verification:
+    automated: []
+    manual: []
+    last_verified: null
+  limitations_non_claims:
+    - "TBD: what this practice does not prove"
+  risks_counterindications:
+    - "TBD: adoption cost, failure mode, or reason not to use"
+  owner: TBD
+  reviewers: []
+  last_reviewed: null
+  next_review: null
+  tags: []
+
+validation_rules:
+  - id: unique-id
+    rule: "id MUST be unique and stable across renames"
+  - id: evidence-for-implemented
+    rule: >-
+      IMPLEMENTED requires at least one code/configuration evidence item and at
+      least one reproducible verification item.
+  - id: tested-maturity
+    rule: "M3_TESTED requires automated tests or a recorded failure/recovery drill"
+  - id: operated-maturity
+    rule: "M4_OPERATED requires deploy-environment telemetry and an operational runbook"
+  - id: measured-maturity
+    rule: "M5_MEASURED requires an SLO/KPI, review cadence, and measurement history"
+  - id: conditional-trigger
+    rule: "CONDITIONAL requires non-empty adoption and reconsideration triggers"
+  - id: not-applicable-decision
+    rule: "NOT_APPLICABLE requires an ADR, counterindication, and reconsideration trigger"
+  - id: review-expiry
+    rule: "Published records require owner, last_reviewed, and next_review"
+  - id: no-technology-proof
+    rule: "A technology name or container count alone MUST NOT satisfy acceptance"
+  - id: business-language
+    rule: "business_outcome MUST describe customer, risk, cost, speed, or compliance value"

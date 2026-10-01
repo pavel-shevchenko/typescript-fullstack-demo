@@ -1,0 +1,187 @@
+jenkins:
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: ${JENKINS_ADMIN_ID}
+          password: ${JENKINS_ADMIN_PASSWORD}
+  authorizationStrategy:
+    globalMatrix:
+      permissions:
+        - "USER:Overall/Administer:${JENKINS_ADMIN_ID}"
+        - "GROUP:Overall/Read:authenticated"
+        - "GROUP:Job/Build:authenticated"
+  clouds:
+    - docker:
+        name: "docker"
+        dockerApi:
+          connectTimeout: 60
+          dockerHost:
+            uri: "tcp://docker:2375"
+          readTimeout: 120
+        templates:
+          - labelString: "agent_w_docker"
+            dockerTemplateBase:
+              image: "comfort/custom_jenkins_agent:local"
+              privileged: false
+              mounts:
+                - "type=tmpfs,destination=/run/"
+                - "type=bind,source=/var/run/docker.sock,destination=/var/run/docker.sock"
+                - "type=bind,source=/srv/comfort_apps/,destination=/home/jenkins/agent/bind_host_srv_apps/"
+              extraHosts:
+                - "comfort-forgejo:172.20.0.20"
+              environmentsString: |
+                DOCKER_HOST=unix:///var/run/docker.sock
+                JENKINS_MASTER_URL=${JENKINS_MASTER_URL}
+                JENKINS_ADMIN_ID=${JENKINS_ADMIN_ID}
+                COMFORT_FORGEJO_REPOSITORY_URL=${COMFORT_FORGEJO_REPOSITORY_URL}
+                COMFORT_FORGEJO_REPOSITORY_SSH_URL=${COMFORT_FORGEJO_REPOSITORY_SSH_URL}
+                MAIN_BRANCH_API_CMS_PORT=${MAIN_BRANCH_API_CMS_PORT}
+                MAIN_BRANCH_API_CRM_PORT=${MAIN_BRANCH_API_CRM_PORT}
+                MAIN_BRANCH_API_SEARCH_PORT=${MAIN_BRANCH_API_SEARCH_PORT}
+                MAIN_BRANCH_FRONTEND_PORT=${MAIN_BRANCH_FRONTEND_PORT}
+                TEST_BRANCH_API_CMS_PORT=${TEST_BRANCH_API_CMS_PORT}
+                TEST_BRANCH_API_CRM_PORT=${TEST_BRANCH_API_CRM_PORT}
+                TEST_BRANCH_API_SEARCH_PORT=${TEST_BRANCH_API_SEARCH_PORT}
+                TEST_BRANCH_FRONTEND_PORT=${TEST_BRANCH_FRONTEND_PORT}
+                MAIN_BRANCH_E2E_BASE_URL=http://docker:${MAIN_BRANCH_FRONTEND_PORT}
+                MAIN_BRANCH_E2E_CMS_URL=http://docker:${MAIN_BRANCH_API_CMS_PORT}/api-cms
+                MAIN_BRANCH_E2E_CRM_URL=http://docker:${MAIN_BRANCH_API_CRM_PORT}/api-crm
+                MAIN_BRANCH_E2E_SEARCH_URL=http://docker:${MAIN_BRANCH_API_SEARCH_PORT}/api-search
+                MAIN_BRANCH_E2E_ADMIN_EMAIL=${MAIN_BRANCH_E2E_ADMIN_EMAIL}
+                TEST_BRANCH_E2E_BASE_URL=http://docker:${TEST_BRANCH_FRONTEND_PORT}
+                TEST_BRANCH_E2E_CMS_URL=http://docker:${TEST_BRANCH_API_CMS_PORT}/api-cms
+                TEST_BRANCH_E2E_CRM_URL=http://docker:${TEST_BRANCH_API_CRM_PORT}/api-crm
+                TEST_BRANCH_E2E_SEARCH_URL=http://docker:${TEST_BRANCH_API_SEARCH_PORT}/api-search
+                TEST_BRANCH_E2E_ADMIN_EMAIL=${TEST_BRANCH_E2E_ADMIN_EMAIL}
+                MAIN_BR_MONO_CONTAINER_PREFIX=comfort_main_br_
+                TEST_BR_MONO_CONTAINER_PREFIX=comfort_test_br_
+                MAIN_BR_MONO_ABS_PATH=/srv/comfort_apps/comfort_main_branch_monorepo_run/
+                TEST_BR_MONO_ABS_PATH=/srv/comfort_apps/comfort_test_branch_monorepo_run/
+                MAIN_BR_BUP_DATA_ABS_PATH=/srv/comfort_apps/comfort_main_branch_backup_data/
+                TEST_BR_BUP_DATA_ABS_PATH=/srv/comfort_apps/comfort_test_branch_backup_data/
+                _DOMAIN_MAIN_BRANCH=${DOMAIN_MAIN_BRANCH}
+                _DOMAIN_TEST_BRANCH=${DOMAIN_TEST_BRANCH}
+                _NEXT_PUBLIC_SERVER_URL=${NEXT_PUBLIC_SERVER_URL}
+                _SEAWEEDFS_S3_DEFAULT_BUCKET=${SEAWEEDFS_S3_DEFAULT_BUCKET}
+                _AI_PROXY_URL=${AI_PROXY_URL}
+                _SMTP_HOST=${SMTP_HOST}
+                _SMTP_USER=${SMTP_USER}
+                _NOREPLY_EMAIL_FROM=${NOREPLY_EMAIL_FROM}
+                _INFISICAL_PROJECT_ID=${INFISICAL_PROJECT_ID}
+            connector:
+              attach:
+                user: "jenkins"
+            instanceCapStr: "10"
+            mode: EXCLUSIVE
+            name: "Comfort Jenkins Agent"
+            pullStrategy: PULL_NEVER
+            retentionStrategy:
+              idleMinutes: 5
+  numExecutors: 0
+  crumbIssuer:
+    standard:
+      excludeClientIPFromCrumb: false
+
+jobs:
+  - file: /var/jenkins_configs/jobs/main_branch_pipeline.groovy
+  - file: /var/jenkins_configs/jobs/test_branch_pipeline.groovy
+
+unclassified:
+  location:
+    url: ${JENKINS_MASTER_URL}
+
+tool:
+  git:
+    installations:
+      - home: "git"
+        name: "Default"
+
+security:
+  queueItemAuthenticator:
+    authenticators:
+      - global:
+          strategy: triggeringUsersAuthorizationStrategy
+  gitHostKeyVerificationConfiguration:
+    sshHostKeyVerificationStrategy:
+      # Forgejo on the same VPS; host key is not pinned in this demo.
+      noHostKeyVerificationStrategy: {}
+  globalJobDslSecurityConfiguration:
+    useScriptSecurity: true
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - string:
+              description: "Forgejo webhook token for Generic Webhook Trigger"
+              id: "forgejo-webhook-token"
+              scope: GLOBAL
+              secret: "${FORGEJO_WEBHOOK_TOKEN}"
+          - string:
+              description: "Forgejo API/clone token (optional HTTP)"
+              id: "forgejo-access-token"
+              scope: GLOBAL
+              secret: "${FORGEJO_ACCESS_TOKEN}"
+          - string:
+              description: "Main deployment E2E admin password"
+              id: "comfort-main-e2e-admin-password"
+              scope: GLOBAL
+              secret: "${MAIN_BRANCH_E2E_ADMIN_PASSWORD}"
+          - string:
+              description: "Test deployment E2E admin password"
+              id: "comfort-test-e2e-admin-password"
+              scope: GLOBAL
+              secret: "${TEST_BRANCH_E2E_ADMIN_PASSWORD}"
+          - string:
+              description: "Comfort JWT signing secret"
+              id: "comfort-jwt-secret"
+              scope: GLOBAL
+              secret: "${JWT_SECRET}"
+          - string:
+              description: "Comfort PostgreSQL password"
+              id: "comfort-pg-password"
+              scope: GLOBAL
+              secret: "${PG_PASSWORD}"
+          - string:
+              description: "Comfort PgCat admin password"
+              id: "comfort-pgcat-admin-password"
+              scope: GLOBAL
+              secret: "${PGCAT_ADMIN_PASSWORD}"
+          - string:
+              description: "Comfort SeaweedFS S3 access key"
+              id: "comfort-seaweedfs-access-key"
+              scope: GLOBAL
+              secret: "${SEAWEEDFS_S3_ACCESS_KEY}"
+          - string:
+              description: "Comfort SeaweedFS S3 secret key"
+              id: "comfort-seaweedfs-secret-key"
+              scope: GLOBAL
+              secret: "${SEAWEEDFS_S3_SECRET_KEY}"
+          - string:
+              description: "Comfort OpenAI API key"
+              id: "comfort-openai-api-key"
+              scope: GLOBAL
+              secret: "${OPENAI_API_KEY}"
+          - string:
+              description: "Comfort Groq API key"
+              id: "comfort-groq-api-key"
+              scope: GLOBAL
+              secret: "${GROQ_API_KEY}"
+          - string:
+              description: "Comfort SMTP password"
+              id: "comfort-smtp-password"
+              scope: GLOBAL
+              secret: "${SMTP_PASSWORD}"
+          - string:
+              description: "Comfort Infisical token"
+              id: "comfort-infisical-token"
+              scope: GLOBAL
+              secret: "${INFISICAL_TOKEN}"
+          - basicSSHUserPrivateKey:
+              id: "forgejo-ssh-key"
+              privateKeySource:
+                directEntry:
+                  privateKey: "${FORGEJO_SSH_PRIVATE_KEY}"
+              scope: GLOBAL
+              username: "${FORGEJO_SSH_USERNAME}"

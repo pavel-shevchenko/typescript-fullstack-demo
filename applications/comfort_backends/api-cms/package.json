@@ -1,0 +1,28 @@
+{
+  "name": "api-cms",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "module": "./main.ts",
+  "scripts": {
+    "start:dev": "bun run --bun --watch ./main.ts",
+    "start": "bun run --bun ./main.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1113.0",
+    "@aws-sdk/lib-storage": "^3.1113.0",
+    "bcryptjs": "^3.0.3",
+    "busboy": "1.6.0",
+    "class-transformer": "0.5.1",
+    "class-validator": "0.14.1",
+    "domain_unified": "workspace:*",
+    "prisma_cms": "workspace:*",
+    "prisma_search": "workspace:*",
+    "reflect-metadata": "0.2.2",
+    "types_consts_utils": "workspace:*",
+    "validation": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "5.7.3"
+  }
+}

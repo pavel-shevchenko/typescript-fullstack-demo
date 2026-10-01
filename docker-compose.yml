@@ -1,0 +1,376 @@
+# Comfort local dev: CMS + CRM + search Hono backends, Next frontend, Python coding, Postgres×3, SeaweedFS.
+# Без gateway/relay — server actions ходят напрямую в api-cms / api-crm / api-search.
+
+x-pg-primary: &pg-primary
+  image: postgres:18.3-alpine
+  restart: unless-stopped
+  environment:
+    TZ: ${WORKSPACE_TIMEZONE}
+    POSTGRES_HOST_AUTH_METHOD: md5
+    POSTGRES_USER: ${PG_USER}
+    POSTGRES_PASSWORD: ${PG_PASSWORD}
+  command:
+    - postgres
+    - -c
+    - listen_addresses=*
+    - -c
+    - wal_level=replica
+    - -c
+    - max_wal_senders=10
+    - -c
+    - max_replication_slots=10
+    - -c
+    - wal_keep_size=512MB
+    - -c
+    - hot_standby=on
+  networks: [database]
+
+x-pg-replica: &pg-replica
+  image: postgres:18.3-alpine
+  restart: unless-stopped
+  environment:
+    TZ: ${WORKSPACE_TIMEZONE}
+    POSTGRES_HOST_AUTH_METHOD: md5
+    POSTGRES_USER: ${PG_USER}
+    POSTGRES_PASSWORD: ${PG_PASSWORD}
+    PGPASSWORD: ${PG_PASSWORD}
+  networks: [database]
+
+services:
+  prepare:
+    image: alpine:latest
+    env_file: [.env]
+    volumes: [./:/workspace]
+    working_dir: /workspace
+    command:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache gettext
+        export PGCAT_PORT=6432 POOL_NAME=comfort_cms PG_DATABASE=${CMS_PG_DATABASE} PG_PRIMARY_HOST=cms-pg-1 PG_REPLICA_A_HOST=cms-pg-2 PG_REPLICA_B_HOST=cms-pg-3 PGCAT_ADMIN_USERNAME=${PGCAT_ADMIN_USERNAME} PGCAT_ADMIN_PASSWORD=${PGCAT_ADMIN_PASSWORD} PG_USER=${PG_USER} PG_PASSWORD=${PG_PASSWORD}
+        envsubst < infrastructure/pgcat/templates/pgcat.toml > infrastructure/pgcat/cms.generated.toml
+        export PGCAT_PORT=6433 POOL_NAME=comfort_crm PG_DATABASE=${CRM_PG_DATABASE} PG_PRIMARY_HOST=crm-pg-1 PG_REPLICA_A_HOST=crm-pg-2 PG_REPLICA_B_HOST=crm-pg-3
+        envsubst < infrastructure/pgcat/templates/pgcat.toml > infrastructure/pgcat/crm.generated.toml
+        envsubst < infrastructure/seaweedfs/templates/s3.json > infrastructure/seaweedfs/config/s3.json
+        exit 0
+
+  cms-pg-1:
+    <<: *pg-primary
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${CMS_PG_DATABASE}
+    volumes:
+      - ./infrastructure/postgres/data/cms-1:/var/lib/postgresql
+      - ./infrastructure/postgres/initdb/01-allow-replication.sh:/docker-entrypoint-initdb.d/01-allow-replication.sh:ro
+    depends_on:
+      prepare:
+        condition: service_completed_successfully
+
+  cms-pg-2:
+    <<: *pg-replica
+    volumes:
+      - ./infrastructure/postgres/data/cms-2:/var/lib/postgresql
+      - ./infrastructure/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on: [cms-pg-1]
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PGPASSWORD: ${PG_PASSWORD}
+      PRIMARY_HOST: cms-pg-1
+      SLOT: cms_replica_2
+      PGDATA: /var/lib/postgresql/18/docker
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+
+  cms-pg-3:
+    <<: *pg-replica
+    volumes:
+      - ./infrastructure/postgres/data/cms-3:/var/lib/postgresql
+      - ./infrastructure/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on: [cms-pg-1]
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PGPASSWORD: ${PG_PASSWORD}
+      PRIMARY_HOST: cms-pg-1
+      SLOT: cms_replica_3
+      PGDATA: /var/lib/postgresql/18/docker
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+
+  cms-pgcat:
+    image: ghcr.io/postgresml/pgcat:v1.2.0
+    restart: unless-stopped
+    depends_on: [prepare, cms-pg-1]
+    volumes:
+      - ./infrastructure/pgcat/cms.generated.toml:/etc/pgcat/pgcat.toml:ro
+    command: [pgcat, /etc/pgcat/pgcat.toml]
+    networks: [database]
+
+  crm-pg-1:
+    <<: *pg-primary
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${CRM_PG_DATABASE}
+    volumes:
+      - ./infrastructure/postgres/data/crm-1:/var/lib/postgresql
+      - ./infrastructure/postgres/initdb/01-allow-replication.sh:/docker-entrypoint-initdb.d/01-allow-replication.sh:ro
+    depends_on:
+      prepare:
+        condition: service_completed_successfully
+
+  crm-pg-2:
+    <<: *pg-replica
+    volumes:
+      - ./infrastructure/postgres/data/crm-2:/var/lib/postgresql
+      - ./infrastructure/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on: [crm-pg-1]
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PGPASSWORD: ${PG_PASSWORD}
+      PRIMARY_HOST: crm-pg-1
+      SLOT: crm_replica_2
+      PGDATA: /var/lib/postgresql/18/docker
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+
+  crm-pg-3:
+    <<: *pg-replica
+    volumes:
+      - ./infrastructure/postgres/data/crm-3:/var/lib/postgresql
+      - ./infrastructure/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on: [crm-pg-1]
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      PGPASSWORD: ${PG_PASSWORD}
+      PRIMARY_HOST: crm-pg-1
+      SLOT: crm_replica_3
+      PGDATA: /var/lib/postgresql/18/docker
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+
+  crm-pgcat:
+    image: ghcr.io/postgresml/pgcat:v1.2.0
+    restart: unless-stopped
+    depends_on: [prepare, crm-pg-1]
+    volumes:
+      - ./infrastructure/pgcat/crm.generated.toml:/etc/pgcat/pgcat.toml:ro
+    command: [pgcat, /etc/pgcat/pgcat.toml]
+    networks: [database]
+
+  search-pg-1:
+    # Hunspell dict files live in this image; SEARCH_POSTGRES_IMAGE is the FROM base.
+    build:
+      context: ./infrastructure/postgres/search-pg
+      args:
+        SEARCH_POSTGRES_IMAGE: ${SEARCH_POSTGRES_IMAGE:-pgvector/pgvector:0.8.6-pg18}
+    image: comfort-search-pg:fts
+    pull_policy: build
+    restart: unless-stopped
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE:-Europe/Moscow}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER:-comfort}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-comfort_demo_pg_password}
+      POSTGRES_DB: ${SEARCH_PG_DATABASE:-comfort_search}
+    volumes:
+      - ./infrastructure/postgres/data/search-1:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks: [database]
+
+  redis:
+    image: redis:8.2-alpine
+    restart: unless-stopped
+    networks: [database]
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.94
+    restart: unless-stopped
+    depends_on:
+      prepare:
+        condition: service_completed_successfully
+    # One volume node: 001 cannot place a replica and S3 PutObject returns InternalError 500.
+    command: server -dir=/data -filer -s3 -s3.config=/config/s3.json -master.defaultReplication=000 -filer.defaultReplicaPlacement=000 -master.volumePreallocate=false -master.volumeSizeLimitMB=512 -volume.minFreeSpace=1GiB -volume.max=4 -ip.bind=0.0.0.0
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9333/cluster/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE:-Europe/Moscow}
+      WEED_MASTER_VOLUME_GROWTH_COPY_1: "1"
+      WEED_MASTER_VOLUME_GROWTH_COPY_2: "1"
+      WEED_MASTER_VOLUME_GROWTH_COPY_3: "1"
+      WEED_MASTER_VOLUME_GROWTH_COPY_OTHER: "1"
+    volumes:
+      - ./infrastructure/seaweedfs/config/s3.json:/config/s3.json:ro
+      - ./infrastructure/seaweedfs/data:/data
+    networks: [seaweedfs]
+
+  seaweedfs-init:
+    image: amazon/aws-cli:2.22.35
+    depends_on: [seaweedfs]
+    env_file: [.env]
+    volumes:
+      - ./infrastructure/seaweedfs/scripts/init-s3-bucket.sh:/init-s3-bucket.sh:ro
+    entrypoint: ["/bin/sh", "/init-s3-bucket.sh"]
+    networks: [seaweedfs]
+
+  migrate:
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    working_dir: /workspace
+    env_file: [.env]
+    environment:
+      CMS_DATABASE_URL: ${CMS_DATABASE_DIRECT_URL}
+      CRM_DATABASE_URL: ${CRM_DATABASE_DIRECT_URL}
+      SEARCH_DATABASE_URL: ${SEARCH_DATABASE_DIRECT_URL:-postgresql://comfort:comfort_demo_pg_password@search-pg-1:5432/comfort_search?schema=public&sslmode=disable}
+    volumes: [./:/workspace]
+    depends_on:
+      cms-pg-1:
+        condition: service_started
+      crm-pg-1:
+        condition: service_started
+      search-pg-1:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        bun install
+        cd packages/prisma_cms && bunx prisma db push && bunx prisma generate
+        cd ../prisma_crm && bunx prisma db push && bunx prisma generate
+        cd ../prisma_search
+        # Extensions before tables; FTS columns after db push (seed also ensures them).
+        bun -e "import { ensureSearchDatabaseExtensions } from './prisma/search-db-setup.ts'; await ensureSearchDatabaseExtensions(process.env.SEARCH_DATABASE_URL || process.env.SEARCH_DATABASE_DIRECT_URL);"
+        bunx prisma db push && bunx prisma generate
+        bun -e "import { ensureSearchDatabaseFtsColumns } from './prisma/search-db-setup.ts'; await ensureSearchDatabaseFtsColumns(process.env.SEARCH_DATABASE_URL || process.env.SEARCH_DATABASE_DIRECT_URL);"
+        cd /workspace
+        bun run --bun packages/prisma_cms/prisma/seeds/init.seed.ts
+        bun run --bun packages/prisma_crm/prisma/seeds/init.seed.ts
+        CMS_DATABASE_URL="$CMS_DATABASE_URL" CRM_DATABASE_URL="$CRM_DATABASE_URL" \
+          bun run --bun packages/prisma_search/prisma/seeds/init.seed.ts
+    networks: [database]
+
+  api-cms:
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_backends/api-cms
+    env_file: [.env]
+    environment:
+      # Local compose: talk to primary directly (pgcat ports differ CMS=6432 / CRM=6433; replicas may lag).
+      CMS_DATABASE_URL: ${CMS_DATABASE_DIRECT_URL}
+      SEARCH_DATABASE_URL: ${SEARCH_DATABASE_DIRECT_URL:-postgresql://comfort:comfort_demo_pg_password@search-pg-1:5432/comfort_search?schema=public&sslmode=disable}
+      BASE_URL_OF_API_CRM: http://api-crm:3000/api-crm/
+    volumes: [./:/workspace]
+    command: ["bun", "run", "start:dev"]
+    ports: ["${CMS_API_PORT}:3000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      cms-pg-1:
+        condition: service_started
+      seaweedfs:
+        condition: service_healthy
+      seaweedfs-init:
+        condition: service_started
+    networks: [edge, database, seaweedfs]
+
+  api-crm:
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_backends/api-crm
+    env_file: [.env]
+    environment:
+      CRM_DATABASE_URL: ${CRM_DATABASE_DIRECT_URL}
+      SEARCH_DATABASE_URL: ${SEARCH_DATABASE_DIRECT_URL:-postgresql://comfort:comfort_demo_pg_password@search-pg-1:5432/comfort_search?schema=public&sslmode=disable}
+    volumes: [./:/workspace]
+    command: ["bun", "run", "start:dev"]
+    ports: ["${CRM_API_PORT}:3000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      crm-pg-1:
+        condition: service_started
+    networks: [edge, database, seaweedfs]
+
+  api-search:
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_backends/api-search
+    env_file: [.env]
+    environment:
+      SEARCH_DATABASE_URL: ${SEARCH_DATABASE_DIRECT_URL:-postgresql://comfort:comfort_demo_pg_password@search-pg-1:5432/comfort_search?schema=public&sslmode=disable}
+    volumes: [./:/workspace]
+    command: ["bun", "run", "start:dev"]
+    ports: ["${SEARCH_API_PORT:-4504}:3000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [edge, database]
+
+  # D6: только edge — без доступа к database (schemas через HTTP api-cms/api-crm)
+  python-coding:
+    build: ./services/python_coding
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      COMFORT_GENERATED_ROOT: /workspace/generated/runtime
+      # Internal listen (host publish uses PYTHON_CODING_PORT from .env, e.g. 4503→8200).
+      PORT: "8200"
+    volumes:
+      - ./:/workspace
+    # Live code from workspace (deps still from image).
+    command: ["python", "/workspace/services/python_coding/main.py"]
+    ports: ["${PYTHON_CODING_PORT}:8200"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8200/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    networks: [edge]
+
+  comfort_public:
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_public
+    env_file: [.env]
+    environment:
+      PYTHON_CODING_URL: ${PYTHON_CODING_URL:-http://python-coding:8200}
+    volumes: [./:/workspace]
+    command: ["bun", "run", "dev"]
+    ports: ["${WEB_PORT}:3000"]
+    depends_on:
+      api-cms:
+        condition: service_started
+      api-crm:
+        condition: service_started
+      api-search:
+        condition: service_started
+      python-coding:
+        condition: service_healthy
+    networks: [edge]
+
+networks:
+  edge:
+  database:
+  seaweedfs:

@@ -1,0 +1,180 @@
+# Prod test branch: по одному Postgres для CMS/CRM/search (без реплик/PgCat), SeaweedFS replication 000.
+# Запуск: docker compose -p comfort-test -f docker-compose-prod-common.yml -f docker-compose-for-test-branch.yml up
+
+name: comfort-test
+
+services:
+  comfort_prepare_config:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}prepare_config__prod
+    image: alpine:3.21
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace/
+    env_file:
+      - .env
+    entrypoint: >
+      /bin/sh -c "
+        apk add --no-cache gettext;
+        cd /workspace/infrastructure/seaweedfs/;
+        envsubst '$${SEAWEEDFS_S3_ACCESS_KEY} $${SEAWEEDFS_S3_SECRET_KEY}' < templates/s3.json > config/s3.json;
+        exit 0;
+      "
+
+  cms-pg-1:
+    image: postgres:18.3-alpine
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}cms_pg_1
+    restart: unless-stopped
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/cms-1/:/var/lib/postgresql
+    depends_on:
+      comfort_prepare_config:
+        condition: service_completed_successfully
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${CMS_PG_DATABASE}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks: [database]
+
+  crm-pg-1:
+    image: postgres:18.3-alpine
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}crm_pg_1
+    restart: unless-stopped
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/crm-1/:/var/lib/postgresql
+    depends_on:
+      comfort_prepare_config:
+        condition: service_completed_successfully
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${CRM_PG_DATABASE}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks: [database]
+
+  search-pg-1:
+    build:
+      context: ${MONOREPO_ABS_PATH-./}infrastructure/postgres/search-pg
+      args:
+        SEARCH_POSTGRES_IMAGE: ${SEARCH_POSTGRES_IMAGE:-pgvector/pgvector:0.8.6-pg18}
+    image: ${CONTAINER_NAME_PREFIX-comfort_}search-pg:fts
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}search_pg_1
+    restart: unless-stopped
+    volumes:
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/postgres/data/search-1/:/var/lib/postgresql
+    depends_on:
+      comfort_prepare_config:
+        condition: service_completed_successfully
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${SEARCH_PG_DATABASE:-comfort_search}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks: [database]
+
+  api-cms:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}api_cms__prod
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_backends/api-cms
+    env_file: [.env]
+    environment:
+      CMS_DATABASE_URL: ${CMS_DATABASE_DIRECT_URL}
+      SEARCH_DATABASE_URL: ${SEARCH_DATABASE_DIRECT_URL}
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace
+    command: ["/bin/sh", "-c", "cd /workspace && bun install && cd applications/comfort_backends/api-cms && bun run start"]
+    ports:
+      - ${TEST_BRANCH_API_CMS_PORT}:3000
+    depends_on:
+      comfort_prepare_cms:
+        condition: service_completed_successfully
+    networks: [edge, database, seaweedfs]
+
+  api-crm:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}api_crm__prod
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_backends/api-crm
+    env_file: [.env]
+    environment:
+      CRM_DATABASE_URL: ${CRM_DATABASE_DIRECT_URL}
+      SEARCH_DATABASE_URL: ${SEARCH_DATABASE_DIRECT_URL}
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace
+    command: ["/bin/sh", "-c", "cd /workspace && bun install && cd applications/comfort_backends/api-crm && bun run start"]
+    ports:
+      - ${TEST_BRANCH_API_CRM_PORT}:3000
+    depends_on:
+      comfort_prepare_crm:
+        condition: service_completed_successfully
+    networks: [edge, database, seaweedfs]
+
+  api-search:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}api_search__prod
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_backends/api-search
+    env_file: [.env]
+    environment:
+      SEARCH_DATABASE_URL: ${SEARCH_DATABASE_DIRECT_URL}
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace
+    command: ["/bin/sh", "-c", "cd /workspace && bun install && cd applications/comfort_backends/api-search && bun run start"]
+    ports:
+      - ${TEST_BRANCH_API_SEARCH_PORT}:3000
+    depends_on:
+      comfort_prepare_search:
+        condition: service_completed_successfully
+    networks: [edge, database]
+
+  python-coding:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}python_coding__prod
+    build:
+      context: ${MONOREPO_ABS_PATH-./}services/python_coding
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      COMFORT_GENERATED_ROOT: /workspace/generated/runtime
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace
+    networks: [edge]
+
+  comfort_public:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}public__prod
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    restart: unless-stopped
+    working_dir: /workspace/applications/comfort_public
+    env_file: [.env]
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/workspace
+    command:
+      [
+        "/bin/sh",
+        "-c",
+        "cd /workspace && bun install && cd applications/comfort_public && bun run build && bun run start",
+      ]
+    ports:
+      - ${TEST_BRANCH_FRONTEND_PORT}:3000
+    depends_on: [api-cms, api-crm, api-search, python-coding]
+    networks: [edge]

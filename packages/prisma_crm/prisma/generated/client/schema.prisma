@@ -1,0 +1,92 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum CrmMemberRole {
+  owner
+  manager
+  staff
+}
+
+model CrmTenant {
+  id          BigInt   @id @default(autoincrement())
+  slug        String   @unique
+  displayName String
+  timezone    String   @default("Europe/Moscow")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  Members      CrmTenantMember[]
+  Contacts     CrmContact[]
+  Services     CrmService[]
+  Appointments CrmAppointment[]
+
+  @@map("crm_tenant")
+}
+
+model CrmTenantMember {
+  id        BigInt        @id @default(autoincrement())
+  tenantId  BigInt
+  userId    BigInt
+  role      CrmMemberRole @default(staff)
+  createdAt DateTime      @default(now())
+
+  Tenant CrmTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@map("crm_tenant_member")
+}
+
+model CrmContact {
+  id        BigInt   @id @default(autoincrement())
+  tenantId  BigInt
+  fullName  String
+  phone     String?
+  email     String?
+  notes     String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  Tenant       CrmTenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  Appointments CrmAppointment[]
+
+  @@map("crm_contact")
+}
+
+model CrmService {
+  id          BigInt   @id @default(autoincrement())
+  tenantId    BigInt
+  name        String
+  durationMin Int      @default(60)
+  priceRub    Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  Tenant       CrmTenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  Appointments CrmAppointment[]
+
+  @@map("crm_service")
+}
+
+model CrmAppointment {
+  id        BigInt   @id @default(autoincrement())
+  tenantId  BigInt
+  contactId BigInt
+  serviceId BigInt
+  startsAt  DateTime
+  notes     String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  Tenant  CrmTenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  Contact CrmContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  Service CrmService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@map("crm_appointment")
+}

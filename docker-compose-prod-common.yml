@@ -1,0 +1,148 @@
+# Общие сервисы prod-стека Comfort (prepare prisma, Redis, SeaweedFS, сети).
+# Запуск только вместе с overlay ветки, common — первым:
+#   docker compose -p comfort-main -f docker-compose-prod-common.yml -f docker-compose-for-main-branch.yml up
+#   docker compose -p comfort-test -f docker-compose-prod-common.yml -f docker-compose-for-test-branch.yml up
+
+services:
+  comfort_prepare_cms:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}prepare_cms__prod
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    depends_on:
+      cms-pg-1:
+        condition: service_healthy
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/project_root/
+    env_file:
+      - .env
+    environment:
+      CMS_DATABASE_URL: ${CMS_DATABASE_DIRECT_URL}
+    entrypoint: >
+      /bin/sh -c "
+        apk add --no-cache postgresql-client;
+        cd /project_root/;
+        bun install;
+        cd packages/prisma_cms/;
+        bunx prisma db push;
+        bunx prisma generate --no-hints;
+        bun run --bun prisma/seeds/init.seed.ts;
+        exit 0;
+      "
+    networks:
+      - database
+
+  comfort_prepare_crm:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}prepare_crm__prod
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    depends_on:
+      crm-pg-1:
+        condition: service_healthy
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/project_root/
+    env_file:
+      - .env
+    environment:
+      CRM_DATABASE_URL: ${CRM_DATABASE_DIRECT_URL}
+    entrypoint: >
+      /bin/sh -c "
+        apk add --no-cache postgresql-client;
+        cd /project_root/;
+        bun install;
+        cd packages/prisma_crm/;
+        bunx prisma db push;
+        bunx prisma generate --no-hints;
+        bun run --bun prisma/seeds/init.seed.ts;
+        exit 0;
+      "
+    networks:
+      - database
+
+  comfort_prepare_search:
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}prepare_search__prod
+    image: oven/bun:${DOCKER_BUN_VERSION}
+    depends_on:
+      comfort_prepare_cms:
+        condition: service_completed_successfully
+      comfort_prepare_crm:
+        condition: service_completed_successfully
+      search-pg-1:
+        condition: service_healthy
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}:/project_root/
+    env_file:
+      - .env
+    environment:
+      SEARCH_DATABASE_URL: ${SEARCH_DATABASE_DIRECT_URL}
+      CMS_DATABASE_URL: ${CMS_DATABASE_DIRECT_URL}
+      CRM_DATABASE_URL: ${CRM_DATABASE_DIRECT_URL}
+    entrypoint: >
+      /bin/sh -c "
+        set -e;
+        cd /project_root/;
+        bun install;
+        cd packages/prisma_search/;
+        bun -e \"import { ensureSearchDatabaseExtensions } from './prisma/search-db-setup.ts'; await ensureSearchDatabaseExtensions(process.env.SEARCH_DATABASE_URL || process.env.SEARCH_DATABASE_DIRECT_URL);\";
+        if ls prisma/migrations/*/migration.sql >/dev/null 2>&1; then bunx prisma migrate deploy; else bunx prisma db push; fi;
+        bunx prisma generate --no-hints;
+        bun -e \"import { ensureSearchDatabaseFtsColumns } from './prisma/search-db-setup.ts'; await ensureSearchDatabaseFtsColumns(process.env.SEARCH_DATABASE_URL || process.env.SEARCH_DATABASE_DIRECT_URL);\";
+        bun run --bun prisma/seeds/init.seed.ts;
+        exit 0;
+      "
+    networks:
+      - database
+
+  redis:
+    image: redis:8.2-alpine
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}redis
+    restart: unless-stopped
+    networks:
+      - database
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.94
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}seaweedfs
+    restart: unless-stopped
+    depends_on:
+      comfort_prepare_config:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    command: server -dir=/data -filer -s3 -s3.config=/config/s3.json -master.defaultReplication=000 -master.volumePreallocate=false -master.volumeSizeLimitMB=512 -volume.minFreeSpace=1GiB -volume.max=4 -ip.bind=0.0.0.0
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9333/cluster/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+      WEED_MASTER_VOLUME_GROWTH_COPY_1: "1"
+      WEED_MASTER_VOLUME_GROWTH_COPY_2: "1"
+      WEED_MASTER_VOLUME_GROWTH_COPY_3: "1"
+      WEED_MASTER_VOLUME_GROWTH_COPY_OTHER: "1"
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}infrastructure/seaweedfs/config/s3.json:/config/s3.json:ro
+      - ${BACKUP_DATA_ABS_PATH-./}infrastructure/seaweedfs/data/:/data/
+    networks:
+      seaweedfs:
+        aliases:
+          - seaweedfs
+
+  seaweedfs-init:
+    image: amazon/aws-cli:2.22.35
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}seaweedfs_init
+    restart: unless-stopped
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ${MONOREPO_ABS_PATH-./}infrastructure/seaweedfs/scripts/init-s3-bucket.sh:/init-s3-bucket.sh:ro
+    entrypoint: ["/bin/sh", "/init-s3-bucket.sh"]
+    networks:
+      - seaweedfs
+
+networks:
+  edge:
+  database:
+  seaweedfs:

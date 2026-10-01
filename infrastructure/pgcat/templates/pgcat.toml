@@ -1,0 +1,35 @@
+[general]
+host = "0.0.0.0"
+port = ${PGCAT_PORT}
+enable_prometheus_exporter = false
+connect_timeout = 5000
+healthcheck_timeout = 1000
+healthcheck_delay = 30000
+shutdown_timeout = 60000
+ban_time = 60
+log_client_connections = false
+log_client_disconnections = false
+admin_username = "${PGCAT_ADMIN_USERNAME}"
+admin_password = "${PGCAT_ADMIN_PASSWORD}"
+
+[pools.${POOL_NAME}]
+pool_mode = "transaction"
+default_role = "replica"
+query_parser_enabled = true
+query_parser_read_write_splitting = true
+primary_reads_enabled = false
+sharding_function = "pg_bigint_hash"
+
+[pools.${POOL_NAME}.users.0]
+username = "${PG_USER}"
+password = "${PG_PASSWORD}"
+pool_size = 9
+statement_timeout = 0
+
+[pools.${POOL_NAME}.shards.0]
+servers = [
+    [ "${PG_PRIMARY_HOST}", 5432, "primary" ],
+    [ "${PG_REPLICA_A_HOST}", 5432, "replica" ],
+    [ "${PG_REPLICA_B_HOST}", 5432, "replica" ]
+]
+database = "${PG_DATABASE}"

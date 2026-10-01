@@ -1,0 +1,146 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  admin
+  customer
+}
+
+enum ComfortAiRecommendationStatus {
+  pending
+  applying
+  confirmed
+  failed
+  rejected
+}
+
+enum ComfortAiTargetService {
+  cms
+  crm
+}
+
+model User {
+  id           BigInt   @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(customer)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  AuthoredRecommendations ComfortAiRecommendation[] @relation("RecommendationAuthor")
+  ConfirmedRecommendations ComfortAiRecommendation[] @relation("RecommendationConfirmer")
+
+  @@map("cms_user")
+}
+
+model CmsPage {
+  id          BigInt   @id @default(autoincrement())
+  slug        String   @unique
+  title       String
+  summary     String   @default("")
+  bodyMarkdown String  @default("")
+  published   Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("cms_page")
+}
+
+model CmsArticle {
+  id           BigInt   @id @default(autoincrement())
+  slug         String   @unique
+  title        String
+  excerpt      String   @default("")
+  bodyMarkdown String   @default("")
+  published    Boolean  @default(false)
+  heroFiles    Json     @default("[]")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("cms_article")
+}
+
+model CmsPromoBlock {
+  id        BigInt   @id @default(autoincrement())
+  code      String   @unique
+  headline  String
+  subline   String   @default("")
+  ctaLabel  String   @default("Подробнее")
+  ctaHref   String   @default("/")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("cms_promo_block")
+}
+
+model CmsAiPromptSlot {
+  id          BigInt   @id @default(autoincrement())
+  code        String   @unique
+  title       String
+  systemPrompt String  @default("")
+  userPromptTemplate String @default("")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("cms_ai_prompt_slot")
+}
+
+model ComfortAuditEvent {
+  id           BigInt   @id @default(autoincrement())
+  actorUserId  BigInt?
+  action       String
+  entityModel  String
+  entityId     String?
+  payloadJson  Json?
+  correlationId String?
+  createdAt    DateTime @default(now())
+
+  @@map("cms_comfort_audit_event")
+}
+
+model ComfortAiCallLog {
+  id            BigInt   @id @default(autoincrement())
+  correlationId String?
+  provider      String
+  model         String   @default("")
+  latencyMs     Int      @default(0)
+  promptChars   Int      @default(0)
+  responseChars Int      @default(0)
+  success       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@map("cms_comfort_ai_call_log")
+}
+
+model ComfortAiRecommendation {
+  id                  BigInt                        @id @default(autoincrement())
+  authorUserId        BigInt
+  confirmerUserId     BigInt?
+  targetService       ComfortAiTargetService
+  title               String
+  explanation         String                        @default("")
+  payloadJson         Json
+  status              ComfortAiRecommendationStatus @default(pending)
+  requiresAdminConfirm Boolean                      @default(false)
+  applyKey            String?                       @unique
+  applyAttempt        Int                           @default(0)
+  applyError          String?
+  applyStartedAt      DateTime?
+  applyFinishedAt     DateTime?
+  createdAt           DateTime                      @default(now())
+  updatedAt           DateTime                      @updatedAt
+
+  Author    User  @relation("RecommendationAuthor", fields: [authorUserId], references: [id])
+  Confirmer User? @relation("RecommendationConfirmer", fields: [confirmerUserId], references: [id])
+
+  @@map("cms_comfort_ai_recommendation")
+}

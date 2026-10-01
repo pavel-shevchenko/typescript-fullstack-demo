@@ -1,0 +1,36 @@
+{
+  "name": "types_consts_utils",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./index",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    },
+    "./server": {
+      "types": "./server.ts",
+      "default": "./server.ts"
+    },
+    "./server/prisma": {
+      "types": "./server/prisma.ts",
+      "default": "./server/prisma.ts"
+    }
+  },
+  "devDependencies": {
+    "prisma_cms": "workspace:*",
+    "prisma_crm": "workspace:*",
+    "prisma_search": "workspace:*",
+    "typescript": "5.7.3",
+    "@types/express": "5.0.1"
+  },
+  "peerDependencies": {
+    "typescript": "5.7.3"
+  },
+  "dependencies": {
+    "ioredis": "5.6.1",
+    "iovalkey": "0.3.3",
+    "prisma-extension-redis": "3.4.1"
+  }
+}

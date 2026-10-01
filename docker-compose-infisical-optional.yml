@@ -1,0 +1,54 @@
+# Optional Infisical overlay (D5) — secrets injection for prod DinD deploy.
+# Usage:
+#   docker compose -f docker-compose-prod-common.yml \
+#     -f docker-compose-for-main-branch.yml \
+#     -f docker-compose-infisical-optional.yml up -d
+#
+# Requires INFISICAL_* vars in host .env (see .env.template).
+
+services:
+  infisical-agent:
+    image: infisical/cli:latest
+    container_name: ${CONTAINER_NAME_PREFIX-comfort_}infisical_agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      INFISICAL_TOKEN: ${INFISICAL_TOKEN:-}
+      INFISICAL_PROJECT_ID: ${INFISICAL_PROJECT_ID:-}
+      INFISICAL_ENVIRONMENT: ${INFISICAL_ENVIRONMENT:-prod}
+    volumes:
+      - infisical_secrets:/secrets
+    entrypoint: >
+      /bin/sh -c "
+        if [ -z \"$$INFISICAL_TOKEN\" ]; then echo 'INFISICAL_TOKEN not set — skip'; sleep infinity; fi;
+        infisical export --format=dotenv --path=/ --env=$$INFISICAL_ENVIRONMENT > /secrets/runtime.env;
+        sleep infinity;
+      "
+    networks:
+      - edge
+
+  api-cms:
+    env_file:
+      - /secrets/runtime.env
+    depends_on:
+      - infisical-agent
+
+  api-crm:
+    env_file:
+      - /secrets/runtime.env
+    depends_on:
+      - infisical-agent
+
+  comfort_public:
+    env_file:
+      - /secrets/runtime.env
+    depends_on:
+      - infisical-agent
+
+volumes:
+  infisical_secrets:
+
+networks:
+  edge:
+    external: true

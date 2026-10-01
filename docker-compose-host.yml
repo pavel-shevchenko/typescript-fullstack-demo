@@ -1,0 +1,162 @@
+# Host stack: Jenkins + DinD + Caddy + Forgejo on one VPS.
+# Apps deploy inside DinD. Forgejo stays on host network comfort_host.
+#   docker compose -f docker-compose-host.yml up -d
+# Network: Jenkins 172.20.0.10, DinD 172.20.0.12, Forgejo 172.20.0.20, Caddy 172.20.0.18
+
+services:
+  comfort_jenkins_controller:
+    build:
+      context: ./infrastructure/jenkins
+      dockerfile: controller.dockerfile
+    container_name: comfort__jenkins_controller
+    depends_on:
+      comfort_dind_apps_runner:
+        condition: service_healthy
+      comfort_agent_image_builder:
+        condition: service_completed_successfully
+      comfort_forgejo:
+        condition: service_healthy
+    env_file: [.env]
+    networks:
+      jenkins_private_network:
+        ipv4_address: 172.20.0.10
+    ports: ["8080:8080"]
+    restart: unless-stopped
+    volumes:
+      - ./infrastructure/jenkins/:/var/jenkins_configs/
+      - comfort_jenkins_data:/var/jenkins_home/
+    environment:
+      CASC_JENKINS_CONFIG: /var/jenkins_configs/casc.yml
+      DOCKER_HOST: tcp://comfort_dind_apps_runner:2375
+
+  comfort_dind_apps_runner:
+    image: docker:28.3.3-dind
+    container_name: comfort__dind_apps_runner
+    privileged: true
+    networks:
+      jenkins_private_network:
+        ipv4_address: 172.20.0.12
+        aliases: [docker]
+    restart: unless-stopped
+    volumes:
+      - comfort_dind_data:/var/lib/docker/
+      - ${COMFORT_APPS_HOST_PATH}:/srv/comfort_apps/
+    entrypoint: ["/bin/sh", "-lc"]
+    command:
+      [
+        "exec dockerd --group=988 --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --tls=false --insecure-registry=0.0.0.0/0 --add-host=comfort-forgejo:172.20.0.20",
+      ]
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    healthcheck:
+      test: ["CMD-SHELL", "dockerd --version && docker ps"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  comfort_agent_image_builder:
+    image: docker:28.3.3-cli
+    container_name: comfort__agent_image_builder
+    depends_on:
+      comfort_dind_apps_runner:
+        condition: service_healthy
+    environment:
+      DOCKER_HOST: tcp://comfort_dind_apps_runner:2375
+    volumes: [./:/workspace/:ro]
+    entrypoint: ["/bin/sh", "-lc"]
+    command:
+      [
+        "docker build -f /workspace/infrastructure/jenkins/custom_jenkins_agent.dockerfile -t comfort/custom_jenkins_agent:local /workspace/infrastructure/jenkins/ && docker image ls comfort/custom_jenkins_agent:local",
+      ]
+    restart: "no"
+    networks:
+      jenkins_private_network:
+        ipv4_address: 172.20.0.15
+
+  comfort_forgejo:
+    image: codeberg.org/forgejo/forgejo:12
+    container_name: comfort__forgejo
+    restart: unless-stopped
+    hostname: comfort-forgejo
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      FORGEJO__server__DOMAIN: ${DOMAIN_FORGEJO:-git.comfort-demo.example}
+      FORGEJO__server__ROOT_URL: ${FORGEJO_ROOT_URL:-https://git.comfort-demo.example/}
+      FORGEJO__server__SSH_DOMAIN: ${DOMAIN_FORGEJO:-git.comfort-demo.example}
+      FORGEJO__server__SSH_PORT: ${FORGEJO_SSH_HOST_PORT:-2222}
+      FORGEJO__server__SSH_LISTEN_PORT: 22
+      FORGEJO__server__HTTP_PORT: 3000
+      FORGEJO__server__START_SSH_SERVER: "true"
+      FORGEJO__database__DB_TYPE: sqlite3
+      FORGEJO__security__INSTALL_LOCK: "false"
+      FORGEJO__webhook__ALLOWED_HOST_LIST: "172.20.0.10,private,loopback"
+      FORGEJO__service__DISABLE_REGISTRATION: ${FORGEJO_DISABLE_REGISTRATION:-true}
+    volumes:
+      - ${FORGEJO_DATA_PATH:-./infrastructure/forgejo/data}:/data
+    ports:
+      - "${FORGEJO_HTTP_HOST_PORT:-3008}:3000"
+      - "${FORGEJO_SSH_HOST_PORT:-2222}:22"
+    networks:
+      jenkins_private_network:
+        ipv4_address: 172.20.0.20
+        aliases: [comfort-forgejo]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:3000/api/healthz >/dev/null || wget -qO- http://127.0.0.1:3000/ >/dev/null",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  comfort_caddy_prepare:
+    container_name: comfort__caddy_prepare
+    image: alpine:latest
+    volumes: [./:/project_root/]
+    env_file: [.env]
+    entrypoint: >
+      /bin/sh -c "
+        cd /project_root/infrastructure/caddy/conf/
+        apk add --no-cache libc6-compat gettext
+        envsubst '$${DOMAIN_MAIN_BRANCH} $${DOMAIN_TEST_BRANCH} $${DOMAIN_FORGEJO} $${MAIN_BRANCH_API_CMS_PORT} $${MAIN_BRANCH_API_CRM_PORT} $${MAIN_BRANCH_API_SEARCH_PORT} $${MAIN_BRANCH_FRONTEND_PORT} $${TEST_BRANCH_API_CMS_PORT} $${TEST_BRANCH_API_CRM_PORT} $${TEST_BRANCH_API_SEARCH_PORT} $${TEST_BRANCH_FRONTEND_PORT}' < 'Caddyfile.template' >| 'Caddyfile'
+        exit 0;
+      "
+
+  comfort_caddy:
+    image: caddy:2.10.0
+    container_name: comfort__caddy
+    restart: unless-stopped
+    depends_on:
+      comfort_caddy_prepare:
+        condition: service_completed_successfully
+      comfort_forgejo:
+        condition: service_started
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./infrastructure/caddy/conf:/etc/caddy/
+      - comfort_caddy_data:/data/
+      - comfort_caddy_config:/config/
+    environment:
+      TZ: ${WORKSPACE_TIMEZONE}
+    networks:
+      jenkins_private_network:
+        ipv4_address: 172.20.0.18
+
+networks:
+  jenkins_private_network:
+    name: comfort_host
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.1
+
+volumes:
+  comfort_jenkins_data:
+  comfort_dind_data:
+  comfort_caddy_data:
+  comfort_caddy_config:
